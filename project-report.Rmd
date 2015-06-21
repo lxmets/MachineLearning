@@ -1,0 +1,140 @@
+---
+title: "Practical Machine Learning - Project Report"
+author:
+date: "Thursday, June 18, 2015"
+output: html_document
+---
+```{r echo=FALSE,eval=FALSE}
+trains <- read.csv("pml-training.csv",na.strings=c("","#DIV/0!","NA")) # replace missing, DIV/0 and NA values by NA
+
+dim(trains)
+head(trains)
+```
+This is the [Weight Lifting Exercise Dataset](http://groupware.les.inf.puc-rio.br/har) used in our project. The data collected comes from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. Our goal was to build a prediction model so that we can correctly predict the manner in which the participants did their exercises. We detail the steps we took to build our prediction model below: 
+
+## 1. Data Cleaning
+
+First we cleaned the data by removing the first 7 columns of the data because they contain non-sensor information like person ID, timestamp, etc. which are not required by the prediction model. Next, we determined that there were a lot of missing values in the data set. So we removed variables that had at least 97% missing/NA values. By this process we were able to reduce the number of predictors from 160 to 53 and we also converted all the *integer* variables to *numeric*.
+```{r echo=FALSE, eval=FALSE}
+### Data Cleaning
+# Remove the first 7 columns of data because they contain non-sensor information like person ID, timestamp, etc.
+subTrains <- trains[,8:160]
+any(is.na(subTrains))
+str(subTrains)
+# This gives us information about the different variables and their values.
+# Retain only columns whose Percentage of NA values in each column is < 97%
+cleanTrains <- subTrains[,(100*colSums(is.na(subTrains))/nrow(subTrains))<97]
+# Now we only have 53 of the original 160 columns
+#At this point we have a clean data set called cleanTrains
+any(is.na(cleanTrains))
+
+#convert all integer variables to numeric
+asNumeric <- function(x) as.numeric(x)
+toNumeric <- function(d) modifyList(d, lapply(d[, sapply(d, is.integer)], asNumeric))
+cleanTrains <- toNumeric(cleanTrains)
+```
+## 2. Reducing Number of Predictors
+
+Max Kuhn, in his paper [*"Building Predictive Models in R using the caret Package"](http://www.jstatsoft.org/v28/i05/paper) has detailed some strategies to find the minimal set of predictors that can be removed so
+that the pairwise correlations are below a specific threshold. In his example, he had suggested removing predictors that
+result in absolute pairwise correlations greater than 0.90. The following code from Max Kuhn achieves this:
+```{r eval=FALSE}
+# check for correlation between predictors
+descrCorr <- cor(cleanTrains[,1:52])
+# find the predictors to be removed using the findCorrelation function
+highCorr <- findCorrelation(descrCorr, 0.90)
+cleanTrains <- cleanTrains[,-highCorr]
+
+nearZeroVar(cleanTrains[,1:45])
+```
+By doing this we were able to reduce our number of predictors from 52 down to 45. We also checked if we had 
+any variables with near zero variance.
+
+## 3. Creating a Cross Validation Set
+
+We created a cross-validation set with 30% of the data and used the remaining 70% of the data for training and testing.
+```{r eval=FALSE}
+set.seed(7919)
+#create a cross validation test
+inCV <- createDataPartition(y=cleanTrains$classe,p=0.7,list=FALSE)
+newTrain <- cleanTrains[inCV,] # this will be our new training set
+cvTrain <- cleanTrains[-inCV,] #keep cvTrain aside to cross validate the model
+```
+
+## 4. Training and Testing the Model
+
+The lectures had indicated that in competitions hosted by *Netflix* and *kaggle*, the winning entries usually blend Random Forests and Boosting. So initially we compared the performance of *Random Forest* with *Ada Boost* and observed that *Random Forest* yielded a higher accuracy (98.28% accuracy; 97.82% kappa) compared with *Ada Boost* (92.06% accuracy; 89.97% kappa). So we chose to go with *Random Forests*. We trained using *Random Forests* using a 10-fold cross-validation repeated 3 times as shown:
+```{r eval=FALSE}
+# enable multi-core processing
+library(doParallel)
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+fitControl <- trainControl(## 10-fold CV
+        method = "repeatedcv",
+        number = 10,
+        ## repeated ten times
+        repeats = 3)
+fit <- train(classe~.,method="rf",trControl=fitControl,data=newTrain)
+stopCluster(cl)
+fit
+
+# Random Forest was run on 13737 samples with 45 predictors and 5 possible classes for the outcome and the output was:
+# No pre-processing
+# Resampling: Cross-Validated (10 fold, repeated 3 times) 
+#  
+# Summary of sample sizes: 12365, 12364, 12364, 12363, 12364, 12363, ... 
+#  
+# Resampling results across tuning parameters:
+#          
+#              mtry  Accuracy   Kappa      Accuracy SD  Kappa SD   
+#   2    0.9914342  0.9891636  0.002781664  0.003519639
+#  23    0.9926231  0.9906684  0.002688605  0.003401417
+#  45    0.9900027  0.9873526  0.002884870  0.003649509
+#  
+#  Accuracy was used to select the optimal model using  the largest value.
+#  The final value used for the model was mtry = 23. 
+```
+ 
+## 5. Cross Validation of the Model and Out-of-Sample Error Rate
+
+We validated our model by running it on the cross-validation set we had prepared earlier. Based on the cross-validation, as seen from the indicated output, we estimate our model's out-of-sample error rate to be 99.42%.
+```{r eval=FALSE}
+pred <- predict(fit,cvTrain)
+confusionMatrix(pred,cvTrain$classe)
+# out of sample error rate = 99.42%
+# Confusion Matrix and Statistics
+# 
+# Reference
+# Prediction    A    B    C    D    E
+#          A 1671    5    0    0    0
+#          B    0 1132    5    0    0
+#          C    2    2 1019   15    0
+#          D    1    0    2  948    1
+#          E    0    0    0    1 1081
+# 
+# Overall Statistics
+# 
+# Accuracy : 0.9942         
+# 95% CI : (0.9919, 0.996)
+# No Information Rate : 0.2845         
+# P-Value [Acc > NIR] : < 2.2e-16      
+# 
+# Kappa : 0.9927         
+# Mcnemar's Test P-Value : NA             
+# 
+# Statistics by Class:
+# 
+#                      Class: A Class: B Class: C Class: D Class: E
+# Sensitivity            0.9982   0.9939   0.9932   0.9834   0.9991
+# Specificity            0.9988   0.9989   0.9961   0.9992   0.9998
+# Pos Pred Value         0.9970   0.9956   0.9817   0.9958   0.9991
+# Neg Pred Value         0.9993   0.9985   0.9986   0.9968   0.9998
+# Prevalence             0.2845   0.1935   0.1743   0.1638   0.1839
+# Detection Rate         0.2839   0.1924   0.1732   0.1611   0.1837
+# Detection Prevalence   0.2848   0.1932   0.1764   0.1618   0.1839
+# Balanced Accuracy      0.9985   0.9964   0.9946   0.9913   0.9994
+```
+
+## 6. Performance on the 20 Test Cases in the Programming Assignment
+
+Our model predicted all the 20 cases in the programming assignment correctly.
